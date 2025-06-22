@@ -124,30 +124,43 @@ async function initializeDefaultIntegrations(): Promise<void> {
     {
       name: "Twilio",
       type: "communication",
-      status: "connected",
-      config: { apiKey: "configured" },
-      usage: { callsToday: 12, callsLimit: 100 }
+      status: process.env.TWILIO_ACCOUNT_SID ? "connected" : "error",
+      config: { 
+        accountSid: process.env.TWILIO_ACCOUNT_SID ? "configured" : "missing",
+        phoneNumber: process.env.TWILIO_PHONE_NUMBER ? "configured" : "missing"
+      },
+      usage: { callsToday: 0, callsLimit: 100 }
     },
     {
       name: "Google Calendar",
       type: "calendar", 
-      status: "connected",
-      config: { clientId: "configured" },
-      usage: { eventsScheduled: 8, eventsLimit: 50 }
+      status: "warning", // Requires OAuth2 setup
+      config: { note: "Requires OAuth2 configuration" },
+      usage: { eventsScheduled: 0, eventsLimit: 50 }
     },
     {
       name: "SendGrid",
       type: "email",
-      status: "connected", 
-      config: { apiKey: "configured" },
-      usage: { emailsSent: 24, emailsLimit: 100 }
+      status: process.env.SENDGRID_API_KEY ? "connected" : "error",
+      config: { apiKey: process.env.SENDGRID_API_KEY ? "configured" : "missing" },
+      usage: { emailsSent: 0, emailsLimit: 100 }
+    },
+    {
+      name: "Slack",
+      type: "communication",
+      status: process.env.SLACK_BOT_TOKEN ? "connected" : "error",
+      config: { 
+        botToken: process.env.SLACK_BOT_TOKEN ? "configured" : "missing",
+        channelId: process.env.SLACK_CHANNEL_ID ? "configured" : "missing"
+      },
+      usage: { messagesSent: 0, messagesLimit: 1000 }
     },
     {
       name: "OpenAI",
       type: "ai",
-      status: "connected",
-      config: { apiKey: "configured" },
-      usage: { tokensUsed: 1200, tokensLimit: 10000 }
+      status: process.env.OPENAI_API_KEY ? "connected" : "error",
+      config: { apiKey: process.env.OPENAI_API_KEY ? "configured" : "missing" },
+      usage: { tokensUsed: 0, tokensLimit: 10000 }
     }
   ];
 

@@ -42,6 +42,7 @@ export interface IStorage {
   // Agent task operations
   createAgentTask(agentTask: InsertAgentTask): Promise<AgentTask>;
   getAgentTasks(agentId: number): Promise<AgentTask[]>;
+  getAgentTaskById(id: number): Promise<AgentTask | undefined>;
   updateAgentTask(id: number, updates: Partial<AgentTask>): Promise<void>;
   
   // Activity operations
@@ -152,6 +153,11 @@ export class DatabaseStorage implements IStorage {
       .from(agentTasks)
       .where(eq(agentTasks.agentId, agentId))
       .orderBy(desc(agentTasks.createdAt));
+  }
+
+  async getAgentTaskById(id: number): Promise<AgentTask | undefined> {
+    const [agentTask] = await db.select().from(agentTasks).where(eq(agentTasks.id, id));
+    return agentTask;
   }
 
   async updateAgentTask(id: number, updates: Partial<AgentTask>): Promise<void> {

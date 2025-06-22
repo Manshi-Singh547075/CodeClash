@@ -1,5 +1,10 @@
 import { storage } from "../storage";
 import { generateAgentResponse } from "../openai";
+import { TwilioService } from "./twilioService";
+import { SendGridService } from "./sendgridService";
+import { SlackService } from "./slackService";
+import { GoogleCalendarService } from "./googleCalendarService";
+import { SocketService } from "./socketService";
 import type { Agent, AgentTask } from "@shared/schema";
 
 export class AgentService {
@@ -62,47 +67,211 @@ export class AgentService {
   }
 
   static async executeAgentTask(agentTaskId: number): Promise<void> {
-    // This simulates task execution - in production this would integrate with actual services
-    
-    setTimeout(async () => {
-      try {
-        // Simulate task execution time
-        await storage.updateAgentTask(agentTaskId, {
-          status: 'in_progress',
-          startedAt: new Date()
-        });
-
-        // Simulate processing time (2-5 seconds)
-        const processingTime = 2000 + Math.random() * 3000;
-        
-        setTimeout(async () => {
-          // Generate realistic result using AI
-          const result = await this.simulateTaskCompletion(agentTaskId);
-          
-          await storage.updateAgentTask(agentTaskId, {
-            status: 'completed',
-            result,
-            completedAt: new Date()
-          });
-
-          // Update agent back to active status
-          const agentTask = await storage.getAgentTasks(result.agentId);
-          const pendingTasks = agentTask.filter(task => task.status === 'pending');
-          
-          if (pendingTasks.length === 0) {
-            await storage.updateAgentStatus(result.agentId, 'active');
-          }
-
-        }, processingTime);
-
-      } catch (error) {
-        console.error('Agent task execution failed:', error);
-        await storage.updateAgentTask(agentTaskId, {
-          status: 'failed',
-          result: { error: 'Task execution failed' }
-        });
+    try {
+      // Get the agent task details
+      const agentTask = await storage.getAgentTaskById(agentTaskId);
+      if (!agentTask) {
+        throw new Error(`Agent task ${agentTaskId} not found`);
       }
-    }, 1000);
+
+      const agent = await storage.getAgent(agentTask.agentId);
+      if (!agent) {
+        throw new Error(`Agent ${agentTask.agentId} not found`);
+      }
+
+      const mainTask = await storage.getTask(agentTask.taskId);
+      if (!mainTask) {
+        throw new Error(`Main task ${agentTask.taskId} not found`);
+      }
+
+      // Update task status to in_progress
+      await storage.updateAgentTask(agentTaskId, {
+        status: 'in_progress',
+        startedAt: new Date()
+      });
+
+      // Broadcast task start to Slack
+      await SlackService.sendTaskNotification({
+        taskId: agentTask.taskId,
+        instruction: agentTask.description,
+        agentType: agent.type,
+        status: 'started'
+      });
+
+      let result: any = {};
+
+      // Execute based on agent type using real services
+      switch (agent.type) {
+        case 'communication':
+          result = await AgentService.executeCommunicationTask(agentTask);
+          break;
+        case 'booking':
+          result = await AgentService.executeBookingTask(agentTask);
+          break;
+        case 'followup':
+          result = await AgentService.executeFollowupTask(agentTask);
+          break;
+        default:
+          throw new Error(`Unknown agent type: ${agent.type}`);
+      }
+
+      // Update task as completed
+      await storage.updateAgentTask(agentTaskId, {
+        status: 'completed',
+        result,
+        completedAt: new Date()
+      });
+
+      // Send completion notification to Slack
+      await SlackService.sendTaskNotification({
+        taskId: agentTask.taskId,
+        instruction: agentTask.description,
+        agentType: agent.type,
+        status: 'completed',
+        results: result
+      });
+
+      // Create activity record
+      await storage.createActivity({
+        userId: mainTask.userId,
+        agentId: agent.id,
+        taskId: agentTask.taskId,
+        type: 'agent_action',
+        title: `${agent.name} completed task`,
+        description: `Successfully completed: ${agentTask.description}`,
+        metadata: { result }
+      });
+
+      // Update agent back to active status
+      const remainingTasks = await storage.getAgentTasks(agent.id);
+      const pendingTasks = remainingTasks.filter(task => task.status === 'pending');
+      
+      if (pendingTasks.length === 0) {
+        await storage.updateAgentStatus(agent.id, 'active');
+      }
+
+    } catch (error) {
+      console.error('Agent task execution failed:', error);
+      await storage.updateAgentTask(agentTaskId, {
+        status: 'failed',
+        result: { error: (error as Error).message }
+      });
+
+      // Send failure notification to Slack
+      try {
+        const agentTask = await storage.getAgentTaskById(agentTaskId);
+        if (agentTask) {
+          const agent = await storage.getAgent(agentTask.agentId);
+          if (agent) {
+            await SlackService.sendTaskNotification({
+              taskId: agentTask.taskId,
+              instruction: agentTask.description,
+              agentType: agent.type,
+              status: 'failed'
+            });
+          }
+        }
+      } catch (slackError) {
+        console.error('Failed to send Slack failure notification:', slackError);
+      }
+    }
+  }
+
+  private static async executeCommunicationTask(agentTask: AgentTask): Promise<any> {
+    const params = agentTask.parameters as any;
+    
+    // Extract phone number and message from parameters
+    const phoneNumber = params.phoneNumber || params.to || '+1234567890'; // Default for demo
+    const message = params.message || agentTask.description;
+    
+    // Make actual Twilio call
+    const callResult = await TwilioService.makeCall({
+      to: phoneNumber,
+      message: message
+    });
+
+    if (callResult.success) {
+      // Wait a bit and get call status
+      setTimeout(async () => {
+        if (callResult.callSid) {
+          const status = await TwilioService.getCallStatus(callResult.callSid);
+          console.log('Call status update:', status);
+        }
+      }, 10000); // Check after 10 seconds
+    }
+
+    return {
+      type: 'communication',
+      service: 'twilio',
+      phoneNumber,
+      message,
+      callSid: callResult.callSid,
+      success: callResult.success,
+      status: callResult.status,
+      error: callResult.error,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  private static async executeBookingTask(agentTask: AgentTask): Promise<any> {
+    const params = agentTask.parameters as any;
+    
+    // Extract booking details from parameters
+    const eventDetails = {
+      summary: params.title || params.summary || 'Meeting',
+      description: params.description || agentTask.description,
+      start: {
+        dateTime: params.startTime || new Date(Date.now() + 24*60*60*1000).toISOString(), // Tomorrow
+        timeZone: params.timeZone || 'America/New_York'
+      },
+      end: {
+        dateTime: params.endTime || new Date(Date.now() + 25*60*60*1000).toISOString(), // Tomorrow + 1 hour
+        timeZone: params.timeZone || 'America/New_York'
+      },
+      attendees: params.attendees || [],
+      location: params.location || 'Conference Room'
+    };
+
+    // Create calendar event
+    const bookingResult = await GoogleCalendarService.createEvent(eventDetails);
+
+    return {
+      type: 'booking',
+      service: 'google_calendar',
+      eventDetails,
+      eventId: bookingResult.eventId,
+      eventUrl: bookingResult.eventUrl,
+      success: bookingResult.success,
+      error: bookingResult.error,
+      timestamp: new Date().toISOString()
+    };
+  }
+
+  private static async executeFollowupTask(agentTask: AgentTask): Promise<any> {
+    const params = agentTask.parameters as any;
+    
+    // Extract email details from parameters
+    const emailDetails = {
+      to: params.email || params.to || 'example@example.com', // Default for demo
+      recipientName: params.recipientName || params.name || 'Recipient',
+      subject: params.subject || 'Follow-up from OmniDimension',
+      meetingDetails: params.meetingDetails,
+      callSummary: params.callSummary || agentTask.description,
+      nextSteps: params.nextSteps || ['Schedule follow-up meeting', 'Review project requirements']
+    };
+
+    // Send follow-up email
+    const emailResult = await SendGridService.sendFollowUpEmail(emailDetails);
+
+    return {
+      type: 'followup',
+      service: 'sendgrid',
+      emailDetails,
+      messageId: emailResult.messageId,
+      success: emailResult.success,
+      error: emailResult.error,
+      timestamp: new Date().toISOString()
+    };
   }
 
   private static async simulateTaskCompletion(agentTaskId: number): Promise<any> {
