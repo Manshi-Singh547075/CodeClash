@@ -1,7 +1,20 @@
-node_modules
-dist
+# Node modules and build output
+node_modules/
+dist/
+
+# OS and editor files
 .DS_Store
-server/public
-vite.config.ts.*
+*.log
 *.tar.gz
+
+# Env and config
 .env
+.env.*        # For .env.development, .env.production, etc.
+vite.config.ts*
+
+# Specific project folders
+server/public/
+
+# IDE/Editor folders (optional)
+.vscode/
+.idea/
